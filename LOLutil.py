@@ -91,10 +91,7 @@ class DodgeThread(QThread):
                     self.power = True
                     break
                 pass
-    def stop(self):
-        self.power = False
         self.quit()
-
     def process_info_updated(self, client_api, client_token, riot_api, riot_port, riot_token, client_port, region):
         self.client_api = client_api
         self.client_token = client_token
