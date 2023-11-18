@@ -1,4 +1,6 @@
 # LOL-utility
+https://github.com/jellyhani/LOL-utility/releases
+
 닷지, 오토레디 기능 프로그램<br>
 추후 기능 필요시 추가예정<br><br>
 
