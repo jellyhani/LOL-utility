@@ -4,7 +4,7 @@ import subprocess
 import time
 import sys
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import QUrl, QTimer, QThread, pyqtSignal
+from PyQt5.QtCore import QUrl, QTimer, QThread, pyqtSignal, QSettings
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import QApplication, QMessageBox, QPushButton
 from bs4 import BeautifulSoup
@@ -27,12 +27,25 @@ class AutoReadyThread(QThread):
         self.proc_search_thread.process_info_updated.connect(self.process_info_updated)
     def run(self):
         while True:
-            Status_url = requests.get(self.riot_api + '/lol-gameflow/v1/gameflow-phase', verify=False)
-            Status_url_response = json.loads(Status_url.text)
-            Status = Status_url_response
-            if Status == "ReadyCheck":
-                requests.post(self.riot_api + '/lol-matchmaking/v1/ready-check/accept', verify=False)
-                QThread.msleep(100)
+            output = subprocess.check_output(f'tasklist /fi "imagename eq {process_name}"', shell=True).decode('iso-8859-1')
+            if process_name in output:
+                try:
+                    Status_url = requests.get(self.riot_api + '/lol-gameflow/v1/gameflow-phase', verify=False)
+                    Status_url_response = json.loads(Status_url.text)
+                    Status = Status_url_response
+                    if Status == "ReadyCheck":
+                        requests.post(self.riot_api + '/lol-matchmaking/v1/ready-check/accept', verify=False)
+                        QThread.msleep(100)
+                except Exception as e:
+                    print(f"Error: {e}")
+                    error_message = str(e)
+                    pyperclip.copy(error_message)
+                except requests.exceptions.RequestException as e:
+                    print(f"An error occurred during the request: {e}")
+                    error_message = str(e)
+                    pyperclip.copy(error_message)
+            else:
+                self.quit()
     def process_info_updated(self, client_api, client_token, riot_api, riot_port, riot_token, client_port, region):
         self.client_api = client_api
         self.client_token = client_token
@@ -114,9 +127,14 @@ class statusThread(QThread):
         self.proc_search_thread.process_info_updated.connect(self.process_info_updated)
         
     def run(self):
+        loadset = False
         while True:
             output = subprocess.check_output(f'tasklist /fi "imagename eq {process_name}"', shell=True).decode('iso-8859-1')
-            if process_name in output:
+            if process_name in output:                
+                if process_name in output and not loadset:
+                    loadset = True
+                if loadset:
+                    self.main_window.load_settings()
                 try:
                     Status_url = requests.get(self.riot_api + '/lol-gameflow/v1/gameflow-phase', verify=False)
                     Status_url_response = json.loads(Status_url.text)
@@ -136,7 +154,8 @@ class statusThread(QThread):
                     pyperclip.copy(error_message)
             else:
                     self.status_updated.emit("Not Connected")
-        self.msleep(100)
+                    loadset = False
+                    QThread.msleep(100)
     def process_info_updated(self, client_api, client_token, riot_api, riot_port, riot_token, client_port, region):
         self.client_api = client_api
         self.client_token = client_token
@@ -320,9 +339,22 @@ class Ui_lolUtil(QtWidgets.QDialog):
         self.proc_search_thread.start()
         self.autoreadythread = AutoReadyThread(self, self.proc_search_thread)
         self.dodgethread = DodgeThread(self, self.proc_search_thread)
+        
+        self.Auto_Ready.stateChanged.connect(self.save_settings)
+        self.dodge_check.stateChanged.connect(self.save_settings)
 
     def update_status_label(self, status):
         self.status.setText(f"Status: {status}")
+
+    def save_settings(self):
+        settings = QSettings('LOLutil', 'CheckBoxsetting')
+        settings.setValue('Auto_Ready', self.Auto_Ready.isChecked())
+        settings.setValue('dodge_check', self.dodge_check.isChecked())
+    
+    def load_settings(self):
+        settings = QSettings('LOLutil', 'CheckBoxsetting')
+        self.Auto_Ready.setChecked(settings.value('Auto_Ready', False, type=bool))
+        self.dodge_check.setChecked(settings.value('dodge_check', False, type=bool))
         
 
     def retranslateUi(self, lolUtil):
@@ -334,7 +366,7 @@ class Ui_lolUtil(QtWidgets.QDialog):
         update_url_response = requests.get(update_url)
         update_version_number = update_url_response.text.strip()
         self.dodge_check.setText(_translate("lolUtil", "0s dodge"))
-        self.Now_version_label.setText(_translate("lolUtil", "현재버전 : 1.0  | 최신버전 : " + format(update_version_number)))
+        self.Now_version_label.setText(_translate("lolUtil", "현재버전 : 1.1  | 최신버전 : " + format(update_version_number)))
         self.Github_btn.setText(_translate("lolUtil", "Github"))
         self.Restart.setText(_translate("lolUtil", "Restart"))
         self.Dodge.setText(_translate("lolUtil", "Dodge"))
@@ -352,7 +384,6 @@ class Ui_lolUtil(QtWidgets.QDialog):
         self.region = region
 
     def Auto_Ready_Changed(self):
-        
         output = subprocess.check_output(f'tasklist /fi "imagename eq {process_name}"', shell=True).decode('iso-8859-1')
         if process_name in output and self.Auto_Ready.isChecked():
             self.autoreadythread.autoready.connect(self.autoreadythread.start)
