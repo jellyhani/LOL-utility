@@ -20,11 +20,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 class AutoReadyThread(QThread):
     autoready = pyqtSignal(bool, str, str, str, str, str, str)
-    def __init__(self, main_window, proc_search_thread):
+    def __init__(self, main_window, proc_search_thread, delay_spinbox):
         super().__init__()
         self.main_window = main_window
         self.proc_search_thread = proc_search_thread
         self.proc_search_thread.process_info_updated.connect(self.process_info_updated)
+        self.delay_spinbox = delay_spinbox
     def run(self):
         while True:
             output = subprocess.check_output(f'tasklist /fi "imagename eq {process_name}"', shell=True).decode('iso-8859-1')
@@ -34,6 +35,8 @@ class AutoReadyThread(QThread):
                     Status_url_response = json.loads(Status_url.text)
                     Status = Status_url_response
                     if Status == "ReadyCheck":
+                        delay_seconds = self.delay_spinbox.value()
+                        QThread.msleep(delay_seconds * 1000)
                         requests.post(self.riot_api + '/lol-matchmaking/v1/ready-check/accept', verify=False)
                         QThread.msleep(100)
                 except Exception as e:
@@ -95,7 +98,6 @@ class DodgeThread(QThread):
                 dodge = self.riot_api + '/lol-login/v1/session/invoke?destination=lcdsServiceProxy&method=call&args=[\"\",\"teambuilder-draft\",\"quitV2\",\"\"]'
                 body = "[\"\",\"teambuilder-draft\",\"quitV2\",\"\"]"
                 response = requests.post(dodge, data=body, verify=False)
-                print(response.text)
                 zero_dodge = False
                 self.power = False
                 break
@@ -317,12 +319,55 @@ class Ui_lolUtil(QtWidgets.QDialog):
         self.Github_btn.setObjectName("Github_btn")
         self.horizontalLayout_2.addWidget(self.Github_btn)
         self.verticalLayout.addLayout(self.horizontalLayout_2)
+
+        self.horizontal_layout_within_vertical = QtWidgets.QHBoxLayout()
+        # Add the horizontal layout to verticalLayout_4
+        self.verticalLayout_4.addLayout(self.horizontal_layout_within_vertical)
+
         self.Auto_Ready = QtWidgets.QCheckBox(lolUtil)
         self.Auto_Ready.setObjectName("Auto_Ready")
-        self.verticalLayout_4.addWidget(self.Auto_Ready)
+        self.horizontal_layout_within_vertical.addWidget(self.Auto_Ready)
+
+        self.spinBox = QtWidgets.QSpinBox(lolUtil)
+        self.spinBox.setMaximum(99999)
+        self.spinBox.setValue(0)
+        self.horizontal_layout_within_vertical.addWidget(self.spinBox)
+
+        self.empty_label = QtWidgets.QLabel(lolUtil)
+        self.empty_label.setText("")
+        self.empty_label.setObjectName("empty_label")
+        self.empty_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.horizontal_layout_within_vertical.addWidget(self.empty_label)
+
         self.dodge_check = QtWidgets.QCheckBox(lolUtil)
         self.dodge_check.setObjectName("dodge_check")
         self.verticalLayout_4.addWidget(self.dodge_check)
+        
+        # Add two buttons horizontally
+        self.matching_layout = QtWidgets.QHBoxLayout()
+        description_label = QtWidgets.QLabel('Auto Matching', self)
+        self.verticalLayout_4.addWidget(description_label)
+        self.Auto_Matching_spinbox = QtWidgets.QSpinBox(lolUtil)
+        self.Auto_Matching_spinbox.setMaximum(99999)
+        self.Auto_Matching_spinbox.setValue(180)
+        self.verticalLayout_4.addWidget(self.Auto_Matching_spinbox)
+        self.verticalLayout_4.addLayout(self.matching_layout)
+        self.start_button = QtWidgets.QPushButton('Matching Start', self)
+        self.matching_layout.addWidget(self.start_button)
+        self.cancel_button = QtWidgets.QPushButton('Matching Cancel', self)
+        self.matching_layout.addWidget(self.cancel_button)
+
+        self.match_timer = QTimer(self)
+        self.match_timer.timeout.connect(self.matching_timeout)
+        self.delay_timer = QTimer(self)
+        self.delay_timer.setSingleShot(True)
+        self.delay_timer.timeout.connect(self.delay_timer_timeout)
+        self.timer_paused_time = 0  # Variable to store paused time
+        self.match_start_time = None  # Variable to store the start time
+        self.match_timer_duration = 0  # Variable to store the duration set in the spin box
+        # Initialize riot_api attribute
+        self.match_timer_duration = self.Auto_Matching_spinbox.value() * 1000
+        
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -337,7 +382,7 @@ class Ui_lolUtil(QtWidgets.QDialog):
         self.status_thread.start()
         self.proc_search_thread.process_info_updated.connect(self.update_process_info)
         self.proc_search_thread.start()
-        self.autoreadythread = AutoReadyThread(self, self.proc_search_thread)
+        self.autoreadythread = AutoReadyThread(self, self.proc_search_thread, self.spinBox)
         self.dodgethread = DodgeThread(self, self.proc_search_thread)
         
         self.Auto_Ready.stateChanged.connect(self.save_settings)
@@ -346,6 +391,66 @@ class Ui_lolUtil(QtWidgets.QDialog):
     def update_status_label(self, status):
         self.status.setText(f"Status: {status}")
 
+    def start_matching(self):
+        search_url = f'{self.riot_api}/lol-lobby/v2/lobby/matchmaking/search'
+        response = requests.post(search_url, verify=False)
+        self.match_start_time = datetime.now()
+        self.match_timer_duration = self.Auto_Matching_spinbox.value() * 1000
+        self.match_timer.start(self.match_timer_duration - self.timer_paused_time)
+
+    def cancel_matching(self):
+        self.match_timer.stop()
+        search_url = f'{self.riot_api}/lol-lobby/v2/lobby/matchmaking/search'
+        response = requests.delete(search_url, verify=False)
+        self.timer_paused_time = 0
+        print('Matching canceled')
+
+    def matching_timeout(self):
+        output = subprocess.check_output(f'tasklist /fi "imagename eq {process_name}"', shell=True).decode('iso-8859-1')
+        if process_name in output:
+            Status_url = requests.get(self.riot_api+'/lol-gameflow/v1/gameflow-phase', verify=False)
+            Status_url_response = json.loads(Status_url.text)
+            Status = Status_url_response
+            new_Status = Status
+            self.timer_paused_time = self.match_timer.remainingTime()
+
+            elapsed_time = datetime.now() - self.match_start_time
+            
+            if Status == 'Matchmaking':
+                if self.match_timer.isActive() and new_Status == 'ChampSelect':
+                    # Timer is already running, pause it
+                    self.timer_paused_time = self.match_timer.remainingTime()
+                    self.match_timer.start()
+                    print(f'Timer paused at {self.timer_paused_time} milliseconds.')
+            elif Status == 'ChampSelect':
+                print('In champselect state. Stopping the timer briefly.')
+                self.match_timer.stop()
+                new_Status = Status
+            elif Status == 'ReadyCheck':
+                print('In champselect state. Stopping the timer briefly.')
+                self.match_timer.stop()
+            elif Status == 'InProgress':
+                self.match_timer.stop()
+                self.timer_paused_time = 0
+                new_Status = Status
+            if elapsed_time.total_seconds() * 1000 >= self.match_timer_duration:
+                print('test')
+                search_url = f'{self.riot_api}/lol-lobby/v2/lobby/matchmaking/search'
+                response = requests.delete(search_url, verify=False)
+                self.match_timer.stop()
+                self.timer_paused_time = 0
+
+                self.delay_timer.start(10000)  # 10000 milliseconds = 10 seconds
+
+        else:
+            pass
+    def delay_timer_timeout(self):
+        # Your code to be executed after the delay
+        search_url = f'{self.riot_api}/lol-lobby/v2/lobby/matchmaking/search'
+        response = requests.post(search_url, verify=False)
+        self.match_timer.start(self.match_timer_duration - self.timer_paused_time)
+    
+    
     def save_settings(self):
         settings = QSettings('LOLutil', 'CheckBoxsetting')
         settings.setValue('Auto_Ready', self.Auto_Ready.isChecked())
@@ -360,13 +465,12 @@ class Ui_lolUtil(QtWidgets.QDialog):
     def retranslateUi(self, lolUtil):
         _translate = QtCore.QCoreApplication.translate
         lolUtil.setWindowTitle(_translate("lolUtil", "lolUtil"))
-        
         self.Auto_Ready.setText(_translate("lolUtil", "Auto Ready"))
         update_url = "https://raw.githubusercontent.com/jellyhani/LOL-utility/main/version"
         update_url_response = requests.get(update_url)
         update_version_number = update_url_response.text.strip()
         self.dodge_check.setText(_translate("lolUtil", "0s dodge"))
-        self.Now_version_label.setText(_translate("lolUtil", "현재버전 : 1.1  | 최신버전 : " + format(update_version_number)))
+        self.Now_version_label.setText(_translate("lolUtil", "현재버전 : 1.2  | 최신버전 : " + format(update_version_number)))
         self.Github_btn.setText(_translate("lolUtil", "Github"))
         self.Restart.setText(_translate("lolUtil", "Restart"))
         self.Dodge.setText(_translate("lolUtil", "Dodge"))
@@ -393,7 +497,6 @@ class Ui_lolUtil(QtWidgets.QDialog):
             self.autoreadythread.terminate()
 
     def Restart_action(self):
-    
         output = subprocess.check_output(f'tasklist /fi "imagename eq {process_name}"', shell=True).decode('iso-8859-1')
         if process_name in output:
             requests.post(self.riot_api + '/riotclient/kill-and-restart-ux', verify=False)
